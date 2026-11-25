@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AV Control</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0b0d10">
+<link href="./noUiSlider-12.1.0/distribute/nouislider.min.css" rel="stylesheet">
+<script src="./noUiSlider-12.1.0/distribute/nouislider.min.js"></script>
+<style>
+	:root {
+		--bg: #0b0d10;
+		--card: #15181d;
+		--line: #262a31;
+		--text: #e9ecf1;
+		--muted: #8a919c;
+		--accent: #d9a441;
+		--on: #3fb86b;
+		--warn: #e0a030;
+		--bad: #d9534f;
+	}
+	* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+	html, body { margin: 0; background: var(--bg); color: var(--text); }
+	/* stop iOS double-tap zoom (iOS ignores user-scalable=no) */
+	html, body, button, select, label, .card { touch-action: manipulation; }
+	body {
+		font: 15px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+		padding: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right))
+		         max(16px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+		max-width: 520px; margin: 0 auto;
+		-webkit-user-select: none; user-select: none;
+	}
+	button, select { font: inherit; color: var(--text); }
+	h2 { margin: 0 0 10px; font-size: 12px; font-weight: 600; letter-spacing: .08em;
+	     text-transform: uppercase; color: var(--muted); }
+
+	/* header */
+	.bar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+	.now { flex: 1; min-width: 0; text-align: center; }
+	.ms { font-size: 17px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+	.sub { font-size: 12px; color: var(--muted); display: flex; align-items: center; justify-content: center; gap: 6px; }
+	.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); }
+	.dot.ok { background: var(--on); }
+	.dot.warn { background: var(--warn); }
+	.icon-btn { width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--line);
+	            background: var(--card); font-size: 20px; padding: 0; }
+	#power.on { color: var(--on); border-color: var(--on); }
+
+	/* cards */
+	.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+	        padding: 12px 14px 14px; margin-bottom: 10px; }
+	.row { display: flex; align-items: center; justify-content: space-between; }
+	.standby .card { opacity: .35; pointer-events: none; }
+
+	/* master volume */
+	.vol { display: flex; align-items: center; gap: 12px; margin: 4px 0 18px; }
+	.readout { flex: 1; text-align: center; font-size: 34px; font-weight: 700;
+	           font-variant-numeric: tabular-nums; }
+	.readout small { font-size: 15px; color: var(--muted); font-weight: 400; }
+	.step { width: 56px; height: 56px; border-radius: 12px; border: 1px solid var(--line);
+	        background: #1d2127; font-size: 28px; padding: 0; }
+	.step:active, .icon-btn:active, .pill:active, .mode:active { background: #2a2f37; }
+	.pill { border: 1px solid var(--line); background: #1d2127; border-radius: 999px; padding: 6px 14px; }
+	.pill.on { background: var(--bad); border-color: var(--bad); }
+	.readout.muted { color: var(--muted); text-decoration: line-through; }
+
+	/* selects */
+	select { width: 100%; background: #1d2127; border: 1px solid var(--line); border-radius: 10px;
+	         padding: 10px; font-size: 16px; -webkit-appearance: none; appearance: none; }
+	.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+	.grid label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+
+	/* faders */
+	.faders { display: flex; justify-content: space-between; padding: 0 4px; }
+	.fader { display: flex; flex-direction: column; align-items: center; width: 20%; }
+	.fader .val { font-variant-numeric: tabular-nums; font-size: 13px; margin-bottom: 14px; min-height: 17px; }
+	.fader .name { margin-top: 14px; font-weight: 600; }
+	.v-slider { height: 230px; }
+
+	/* sound modes */
+	.modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+	.mode { border: 1px solid var(--line); background: #1d2127; border-radius: 10px;
+	        padding: 12px 4px; font-size: 13px; font-weight: 600; }
+	.mode.group { border-color: var(--accent); color: var(--accent); }   /* last MOVIE/MUSIC/GAME/PURE button used */
+	.mode.active { background: var(--accent); border-color: var(--accent); color: #111; }
+
+	/* noUiSlider theme */
+	.noUi-target { background: #2a2f37; border: 0; box-shadow: none; border-radius: 7px; }
+	.noUi-connect { background: var(--accent); }
+	.noUi-handle { border: 0; border-radius: 8px; background: #f4f5f7; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+	.noUi-handle:before, .noUi-handle:after { display: none; }
+	.noUi-vertical { width: 12px; }
+	.noUi-vertical .noUi-handle { width: 34px; height: 22px; right: -11px; top: -11px; }
+	.noUi-horizontal { height: 12px; margin: 0 14px; }
+	.noUi-horizontal .noUi-handle { width: 30px; height: 30px; right: -15px; top: -9px; border-radius: 50%; }
+	.noUi-pips { color: var(--muted); font-size: 10px; }
+	.noUi-marker { background: #3a3f47; }
+	.noUi-marker-large { background: #555b64; }
+	.noUi-pips-vertical { padding: 0 0 0 6px; }
+	.noUi-value-vertical { padding-left: 14px; }
+</style>
+</head>
+<body>
+
+<header class="bar">
+	<button id="power" class="icon-btn" aria-label="Power">&#x23FB;</button>
+	<div class="now">
+		<div id="ms-status" class="ms">&mdash;</div>
+		<div class="sub"><span id="conn-dot" class="dot"></span><span id="conn-text">Connecting&hellip;</span></div>
+	</div>
+	<button id="refresh" class="icon-btn" aria-label="Refresh from AVR">&#x21bb;</button>
+</header>
+
+<main>
+	<section class="card">
+		<h2>Channel levels</h2>
+		<div class="faders">
+			<div class="fader"><div class="val"></div><div class="v-slider" data-key="CVC"  data-ch="C"></div><div class="name">C</div></div>
+			<div class="fader"><div class="val"></div><div class="v-slider" data-key="CVSL" data-ch="SL"></div><div class="name">SL</div></div>
+			<div class="fader"><div class="val"></div><div class="v-slider" data-key="CVSR" data-ch="SR"></div><div class="name">SR</div></div>
+			<div class="fader"><div class="val"></div><div class="v-slider" data-key="CVSW" data-ch="SW"></div><div class="name">SW</div></div>
+			<div class="fader"><div class="val"></div><div class="v-slider" data-key="PSLFE"></div><div class="name">LFE</div></div>
+		</div>
+	</section>
+
+	<section class="card">
+		<div class="row"><h2>Volume</h2><button id="mute" class="pill">Mute</button></div>
+		<div class="vol">
+			<button id="vol-down" class="step" aria-label="Volume down">&minus;</button>
+			<div id="mv-readout" class="readout">--.-<small> dB</small></div>
+			<button id="vol-up" class="step" aria-label="Volume up">+</button>
+		</div>
+		<div id="mv-slider"></div>
+	</section>
+
+	<section class="card">
+		<h2>Sound mode</h2>
+		<div class="modes">
+			<button class="mode" data-ms="MOVIE">Movie</button>
+			<button class="mode" data-ms="MUSIC">Music</button>
+			<button class="mode" data-ms="GAME">Game</button>
+			<button class="mode" data-ms="AUTO">Auto</button>
+			<button class="mode" data-ms="DOLBY DIGITAL">Dolby</button>
+			<button class="mode" data-ms="DTS SURROUND">DTS</button>
+			<button class="mode" data-ms="STEREO">Stereo</button>
+			<button class="mode" data-ms="MCH STEREO">Multi Ch</button>
+			<button class="mode" data-ms="DIRECT">Direct</button>
+			<button class="mode" data-ms="PURE DIRECT">Pure Direct</button>
+		</div>
+	</section>
+
+	<section class="card">
+		<h2>Input</h2>
+		<select id="SI">
+			<option value="SAT/CBL">CBL/SAT</option>
+			<option value="BD">Blu-ray</option>
+			<option value="DVD">DVD</option>
+			<option value="GAME">Game</option>
+			<option value="MPLAY">Media Player</option>
+			<option value="TV">TV Audio</option>
+			<option value="AUX1">AUX1</option>
+			<option value="AUX2">AUX2</option>
+			<option value="CD">CD</option>
+			<option value="PHONO">Phono</option>
+			<option value="TUNER">Tuner</option>
+			<option value="NET">HEOS Music</option>
+			<option value="BT">Bluetooth</option>
+		</select>
+	</section>
+
+	<section class="card">
+		<h2>Audio</h2>
+		<div class="grid">
+			<label>Dynamic Compression
+				<select data-ps="PSDRC">
+					<option value="AUTO">Auto</option>
+					<option value="LOW">Low</option>
+					<option value="MID">Mid</option>
+					<option value="HI">High</option>
+					<option value="OFF">Off</option>
+				</select>
+			</label>
+			<label>MultEQ
+				<select data-ps="PSMULTEQ">
+					<option value="AUDYSSEY">Audyssey</option>
+					<option value="BYP.LR">Bypass L/R</option>
+					<option value="FLAT">Flat</option>
+					<option value="MANUAL">Graphic EQ</option>
+					<option value="OFF">Off</option>
+				</select>
+			</label>
+			<label>Dynamic Volume
+				<select data-ps="PSDYNVOL">
+					<option value="OFF">Off</option>
+					<option value="LIT">Light</option>
+					<option value="MED">Medium</option>
+					<option value="HEV">Heavy</option>
+				</select>
+			</label>
+			<label>Dynamic EQ
+				<select data-ps="PSDYNEQ">
+					<option value="ON">On</option>
+					<option value="OFF">Off</option>
+				</select>
+			</label>
+			<label>Loudness Mgmt
+				<select data-ps="PSLOM">
+					<option value="ON">On</option>
+					<option value="OFF">Off</option>
+				</select>
+			</label>
+		</div>
+	</section>
+</main>
+
+<script>
+(function () {
+	'use strict';
+
+	var WS_URL = 'ws://' + (location.hostname || '10.0.10.250') + ':12254/';
+	var HOLD_MS = 700;   // ignore AVR echoes for a slider this long after you touch it
+
+	var ws = null, serverUp = false, avrUp = false;
+	var state = {};
+	var $ = function (id) { return document.getElementById(id); };
+
+	function send(obj) {
+		if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+	}
+
+	// limit how often a dragging slider sends commands, always delivering the last value
+	function throttle(fn, ms) {
+		var last = 0, timer = null, pending;
+		return function (v) {
+			pending = v;
+			var wait = ms - (Date.now() - last);
+			if (wait <= 0) { last = Date.now(); fn(pending); }
+			else if (!timer) {
+				timer = setTimeout(function () { timer = null; last = Date.now(); fn(pending); }, wait);
+			}
+		};
+	}
+
+	function fmt(v, signed) {
+		var s = Number(v).toFixed(1);
+		return (signed && v > 0 ? '+' : '') + s;
+	}
+
+	// ---- sliders -------------------------------------------------------
+	var sliders = {};   // state key -> element
+
+	function makeSlider(el, key, opts, onValue) {
+		noUiSlider.create(el, opts);
+		el.lastTouch = 0;
+		var sendThrottled = throttle(onValue, 120);
+		el.noUiSlider.on('slide', function (values) {
+			el.lastTouch = Date.now();
+			sendThrottled(Number(values[0]));
+			clearTimeout(el.resync);
+			el.resync = setTimeout(function () {   // snap back to what the AVR reports
+				if (state[key] !== undefined) el.noUiSlider.set(state[key]);
+			}, HOLD_MS + 50);
+		});
+		sliders[key] = el;
+		return el;
+	}
+
+	var mvEl = makeSlider($('mv-slider'), 'MV', {
+		start: -40, step: 0.5, connect: [true, false],
+		range: { min: -80, max: 0 },
+		behaviour: 'none'            // must grab the handle: no jumping by tapping the track
+	}, function (v) { send({ cmd: 'mv', db: v }); });
+
+	mvEl.noUiSlider.on('update', function (values) {
+		$('mv-readout').innerHTML = fmt(values[0]) + '<small> dB</small>';
+	});
+
+	Array.prototype.forEach.call(document.querySelectorAll('.v-slider'), function (el) {
+		var key = el.getAttribute('data-key');
+		var isLfe = key === 'PSLFE';
+		var opts = isLfe ? {
+			start: 0, step: 1, connect: [true, false], range: { min: -10, max: 0 },
+			orientation: 'vertical', direction: 'rtl',
+			pips: { mode: 'values', values: [-10, -5, 0], density: 10 }
+		} : {
+			start: 0, step: 0.5, connect: [true, false], range: { min: -12, max: 12 },
+			orientation: 'vertical', direction: 'rtl',
+			pips: { mode: 'values', values: [-12, -6, 0, 6, 12], density: 8 }
+		};
+		var ch = el.getAttribute('data-ch');
+		makeSlider(el, key, opts, function (v) {
+			send(isLfe ? { cmd: 'lfe', db: v } : { cmd: 'cv', ch: ch, db: v });
+		});
+		var label = el.parentNode.querySelector('.val');
+		el.noUiSlider.on('update', function (values) {
+			label.textContent = isLfe ? Number(values[0]).toFixed(0) : fmt(values[0], true);
+		});
+	});
+
+	// ---- selects & buttons --------------------------------------------
+	var psSelects = {};
+	Array.prototype.forEach.call(document.querySelectorAll('select[data-ps]'), function (sel) {
+		var key = sel.getAttribute('data-ps');
+		psSelects[key] = sel;
+		sel.addEventListener('change', function () { send({ cmd: 'ps', key: key, value: sel.value }); });
+	});
+
+	$('SI').addEventListener('change', function () { send({ cmd: 'si', value: this.value }); });
+
+	Array.prototype.forEach.call(document.querySelectorAll('.mode'), function (b) {
+		b.addEventListener('click', function () { send({ cmd: 'ms', value: b.getAttribute('data-ms') }); });
+	});
+
+	$('vol-up').addEventListener('click', function () { send({ cmd: 'mv', step: 'UP' }); });
+	$('vol-down').addEventListener('click', function () { send({ cmd: 'mv', step: 'DOWN' }); });
+	$('mute').addEventListener('click', function () {
+		send({ cmd: 'mute', value: state.MU === 'ON' ? 'OFF' : 'ON' });
+	});
+	$('power').addEventListener('click', function () {
+		if (state.ZM === 'ON') {
+			if (confirm('Turn the AVR off?')) send({ cmd: 'power', value: 'OFF' });
+		} else {
+			send({ cmd: 'power', value: 'ON' });
+		}
+	});
+	$('refresh').addEventListener('click', function () { send({ cmd: 'refresh' }); });
+
+	// selects get an extra option if the AVR reports something we don't list
+	function setSelect(sel, value) {
+		var found = Array.prototype.some.call(sel.options, function (o) { return o.value === value; });
+		if (!found) {
+			var o = document.createElement('option');
+			o.value = value; o.textContent = value;
+			sel.appendChild(o);
+		}
+		sel.value = value;
+	}
+
+	// The AVR reports the decoder actually in use (e.g. "DOLBY D+ +DS", "DTS:X",
+	// "MULTI CH STEREO"), so map that onto the nearest button. Order matters.
+	var MODE_RULES = [
+		[/^PURE DIRECT/, 'PURE DIRECT'],
+		[/DIRECT/, 'DIRECT'],
+		[/^(MCH|MULTI ?CH) STEREO/, 'MCH STEREO'],
+		[/^STEREO/, 'STEREO'],
+		[/^(DOLBY|DD|DSUR)/, 'DOLBY DIGITAL'],
+		[/^(DTS|NEURAL|IMAX)/, 'DTS SURROUND'],
+		[/^MOVIE/, 'MOVIE'],
+		[/^MUSIC/, 'MUSIC'],
+		[/^GAME/, 'GAME'],
+		[/^AUTO/, 'AUTO']
+	];
+	function tallyMode(reported) {
+		var match = null;
+		for (var i = 0; i < MODE_RULES.length && !match; i++) {
+			if (MODE_RULES[i][0].test(reported)) match = MODE_RULES[i][1];
+		}
+		Array.prototype.forEach.call(document.querySelectorAll('.mode'), function (b) {
+			b.classList.toggle('active', b.getAttribute('data-ms') === match);
+		});
+	}
+
+	// The AVR also reports which MOVIE/MUSIC/GAME/PURE button group is in use (SSSMG).
+	var GROUPS = { MOV: 'MOVIE', MUS: 'MUSIC', GAM: 'GAME', PUR: 'PURE DIRECT' };
+	function tallyGroup(code) {
+		var target = GROUPS[code];
+		Array.prototype.forEach.call(document.querySelectorAll('.mode'), function (b) {
+			b.classList.toggle('group', b.getAttribute('data-ms') === target);
+		});
+	}
+
+	// ---- rendering state from the server --------------------------------
+	function render(key, v) {
+		var el = sliders[key];
+		if (el) {
+			if (Date.now() - el.lastTouch > HOLD_MS) el.noUiSlider.set(v);
+			return;
+		}
+		if (psSelects[key]) return setSelect(psSelects[key], v);
+		switch (key) {
+			case 'SI': setSelect($('SI'), v); break;
+			case 'MS': $('ms-status').textContent = v; tallyMode(v); break;
+			case 'SSSMG': tallyGroup(v); break;
+			case 'MU':
+				$('mute').classList.toggle('on', v === 'ON');
+				$('mv-readout').classList.toggle('muted', v === 'ON');
+				break;
+			case 'ZM':
+				$('power').classList.toggle('on', v === 'ON');
+				document.body.classList.toggle('standby', v === 'OFF');
+				break;
+		}
+	}
+
+	function updateStatus() {
+		var dot = $('conn-dot'), text = $('conn-text');
+		dot.className = 'dot' + (serverUp && avrUp ? ' ok' : serverUp ? ' warn' : '');
+		text.textContent = !serverUp ? 'Kodi remote service offline'
+			: !avrUp ? 'AVR not connected'
+			: state.ZM === 'OFF' ? 'Standby' : 'Connected';
+	}
+
+	function onMessage(e) {
+		var msg;
+		try { msg = JSON.parse(e.data); } catch (err) { return console.log('bad message', e.data); }
+		if (msg.config && msg.config.mv_max !== undefined) {
+			mvEl.noUiSlider.updateOptions({ range: { min: -80, max: msg.config.mv_max } });
+		}
+		if (msg.avr !== undefined) avrUp = msg.avr;
+		if (msg.state) {
+			for (var k in msg.state) {
+				state[k] = msg.state[k];
+				render(k, msg.state[k]);
+			}
+		}
+		updateStatus();
+	}
+
+	// ---- websocket with automatic reconnect ------------------------------
+	var retryTimer = null;
+	function connect() {
+		clearTimeout(retryTimer);
+		if (ws && ws.readyState <= 1) return;
+		ws = new WebSocket(WS_URL);
+		ws.onopen = function () { serverUp = true; updateStatus(); };
+		ws.onmessage = onMessage;
+		ws.onclose = function () {
+			serverUp = false; avrUp = false; updateStatus();
+			retryTimer = setTimeout(connect, 2000);
+		};
+	}
+
+	// phones suspend sockets in the background; reconnect as soon as we're visible again
+	document.addEventListener('visibilitychange', function () {
+		if (!document.hidden) connect();
+	});
+
+	connect();
+})();
+</script>
+</body>
+</html>
