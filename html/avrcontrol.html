@@ -53,6 +53,11 @@
 	.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px;
 	        padding: 12px 14px 14px; margin-bottom: 10px; }
 	.row { display: flex; align-items: center; justify-content: space-between; }
+	/* title left, item centred, item right */
+	.row3 { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; margin-bottom: 8px; }
+	.row3 h2 { margin: 0; }
+	.row3 > :first-child { justify-self: start; }
+	.row3 > :last-child { justify-self: end; }
 	.standby .card { opacity: .35; pointer-events: none; }
 
 	/* master volume */
@@ -97,7 +102,7 @@
 	.noUi-vertical .noUi-handle { width: 34px; height: 22px; right: -11px; top: -11px; }
 	.noUi-horizontal { height: 12px; margin: 0 14px; }
 	.noUi-horizontal .noUi-handle { width: 30px; height: 30px; right: -15px; top: -9px; border-radius: 50%; }
-	.noUi-pips { color: var(--muted); font-size: 10px; }
+	.noUi-pips { color: #b4bac4; font-size: 13px; font-weight: 600; }
 	.noUi-marker { background: #3a3f47; }
 	.noUi-marker-large { background: #555b64; }
 	.noUi-pips-vertical { padding: 0 0 0 6px; }
@@ -128,10 +133,14 @@
 	</section>
 
 	<section class="card">
-		<div class="row"><h2>Volume</h2><button id="mute" class="pill">Mute</button></div>
+		<div class="row3">
+			<button id="mute" class="pill">Mute</button>
+			<button id="display" class="pill">Display</button>
+			<h2>Volume</h2>
+		</div>
 		<div class="vol">
 			<button id="vol-down" class="step" aria-label="Volume down">&minus;</button>
-			<div id="mv-readout" class="readout">--.-<small> dB</small></div>
+			<div id="mv-readout" class="readout">--.-</div>
 			<button id="vol-up" class="step" aria-label="Volume up">+</button>
 		</div>
 		<div id="mv-slider"></div>
@@ -154,7 +163,7 @@
 	</section>
 
 	<section class="card">
-		<div class="row"><h2>Input</h2><button id="display" class="pill">Display</button></div>
+		<h2>Input</h2>
 		<select id="SI">
 			<option value="SAT/CBL">CBL/SAT</option>
 			<option value="BD">Blu-ray</option>
@@ -223,6 +232,9 @@
 
 	var WS_URL = 'ws://' + (location.hostname || '10.0.10.250') + ':12254/';
 	var HOLD_MS = 700;   // ignore AVR echoes for a slider this long after you touch it
+	// Master volume readout: 'absolute' matches the front panel (0-98, 80 = 0 dB),
+	// 'relative' shows dB (-80 to +18).
+	var VOLUME_SCALE = 'absolute';
 
 	var ws = null, serverUp = false, avrUp = false;
 	var state = {};
@@ -250,6 +262,12 @@
 		return (signed && v > 0 ? '+' : '') + s;
 	}
 
+	// channel trim label: "+3", "-6", or "+5.5" if the AVR holds a half-dB value
+	function fmtTrim(v) {
+		var s = v % 1 ? v.toFixed(1) : v.toFixed(0);
+		return (v > 0 ? '+' : '') + s;
+	}
+
 	// ---- sliders -------------------------------------------------------
 	var sliders = {};   // state key -> element
 
@@ -262,7 +280,10 @@
 			sendThrottled(Number(values[0]));
 			clearTimeout(el.resync);
 			el.resync = setTimeout(function () {   // snap back to what the AVR reports
-				if (state[key] !== undefined) el.noUiSlider.set(state[key]);
+				if (state[key] !== undefined) {
+					el.noUiSlider.set(state[key]);
+					if (el.label) el.label.textContent = fmtTrim(Number(state[key]));
+				}
 			}, HOLD_MS + 50);
 		});
 		sliders[key] = el;
@@ -276,7 +297,10 @@
 	}, function (v) { send({ cmd: 'mv', db: v }); });
 
 	mvEl.noUiSlider.on('update', function (values) {
-		$('mv-readout').innerHTML = fmt(values[0]) + '<small> dB</small>';
+		var db = Number(values[0]);
+		$('mv-readout').innerHTML = VOLUME_SCALE === 'absolute'
+			? (db + 80).toFixed(1)
+			: fmt(db) + '<small> dB</small>';
 	});
 
 	Array.prototype.forEach.call(document.querySelectorAll('.v-slider'), function (el) {
@@ -287,17 +311,18 @@
 			orientation: 'vertical', direction: 'rtl',
 			pips: { mode: 'values', values: [-10, -5, 0], density: 10 }
 		} : {
-			start: 0, step: 0.5, connect: [true, false], range: { min: -12, max: 12 },
+			start: 0, step: 1, connect: [true, false], range: { min: -12, max: 6 },
 			orientation: 'vertical', direction: 'rtl',
-			pips: { mode: 'values', values: [-12, -6, 0, 6, 12], density: 8 }
+			pips: { mode: 'values', values: [-12, -9, -6, -3, 0, 3, 6], density: 6 }
 		};
 		var ch = el.getAttribute('data-ch');
 		makeSlider(el, key, opts, function (v) {
 			send(isLfe ? { cmd: 'lfe', db: v } : { cmd: 'cv', ch: ch, db: v });
 		});
 		var label = el.parentNode.querySelector('.val');
+		el.label = label;
 		el.noUiSlider.on('update', function (values) {
-			label.textContent = isLfe ? Number(values[0]).toFixed(0) : fmt(values[0], true);
+			label.textContent = fmtTrim(Number(values[0]));
 		});
 	});
 
@@ -380,7 +405,10 @@
 	function render(key, v) {
 		var el = sliders[key];
 		if (el) {
-			if (Date.now() - el.lastTouch > HOLD_MS) el.noUiSlider.set(v);
+			if (Date.now() - el.lastTouch > HOLD_MS) {
+				el.noUiSlider.set(v);                      // handle snaps to the nearest step...
+				if (el.label) el.label.textContent = fmtTrim(Number(v));   // ...label shows the exact value
+			}
 			return;
 		}
 		if (psSelects[key]) return setSelect(psSelects[key], v);
