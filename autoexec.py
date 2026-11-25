@@ -36,7 +36,8 @@ KEEPALIVE_AFTER = 60           # seconds of silence before we poke the AVR
 DEAD_AFTER = 75                # seconds of silence before we reconnect
 
 STATUS_QUERIES = ['ZM?', 'MV?', 'MU?', 'SI?', 'MS?', 'SSSMG ?', 'CV?', 'PSDRC ?',
-                  'PSDYNEQ ?', 'PSDYNVOL ?', 'PSMULTEQ: ?', 'PSLFE ?', 'PSLOM ?']
+                  'PSDYNEQ ?', 'PSDYNVOL ?', 'PSMULTEQ: ?', 'PSLFE ?', 'PSLOM ?',
+                  'DIM ?']
 
 # Allowed values for the audio-setting dropdowns, and how each is written.
 # (The AV7706 does not answer the old PSDCO command; it reports PSDRC instead.)
@@ -135,6 +136,9 @@ def parse_line(line):
         updates['SI'] = line[2:]
     elif line.startswith('MS'):
         updates['MS'] = line[2:]
+    elif line.startswith('DIM '):
+        # front display dimmer: BRI / DIM / DAR / OFF
+        updates['DIM'] = line[4:].strip()
     elif line.startswith('SSSMG '):
         # sound-mode button group last used: MOV / MUS / GAM / PUR
         updates['SSSMG'] = line[6:].strip()
@@ -283,6 +287,8 @@ def handle_command(msg):
         avr.send('ZMON' if msg['value'] == 'ON' else 'ZMOFF')
     elif cmd == 'mute':
         avr.send('MUON' if msg['value'] == 'ON' else 'MUOFF')
+    elif cmd == 'display':
+        avr.send('DIM OFF' if msg['value'] == 'OFF' else 'DIM BRI')
     elif cmd == 'mv':
         cap = volume_cap()
         if 'step' in msg:

@@ -65,6 +65,7 @@
 	.step:active, .icon-btn:active, .pill:active, .mode:active { background: #2a2f37; }
 	.pill { border: 1px solid var(--line); background: #1d2127; border-radius: 999px; padding: 6px 14px; }
 	.pill.on { background: var(--bad); border-color: var(--bad); }
+	#display.lit { border-color: var(--accent); color: var(--accent); }
 	.readout.muted { color: var(--muted); text-decoration: line-through; }
 
 	/* selects */
@@ -153,7 +154,7 @@
 	</section>
 
 	<section class="card">
-		<h2>Input</h2>
+		<div class="row"><h2>Input</h2><button id="display" class="pill">Display</button></div>
 		<select id="SI">
 			<option value="SAT/CBL">CBL/SAT</option>
 			<option value="BD">Blu-ray</option>
@@ -327,6 +328,9 @@
 		}
 	});
 	$('refresh').addEventListener('click', function () { send({ cmd: 'refresh' }); });
+	$('display').addEventListener('click', function () {
+		send({ cmd: 'display', value: state.DIM === 'OFF' ? 'BRI' : 'OFF' });
+	});
 
 	// selects get an extra option if the AVR reports something we don't list
 	function setSelect(sel, value) {
@@ -384,6 +388,11 @@
 			case 'SI': setSelect($('SI'), v); break;
 			case 'MS': $('ms-status').textContent = v; tallyMode(v); break;
 			case 'SSSMG': tallyGroup(v); break;
+			case 'DIM':
+				var names = { BRI: 'Bright', DIM: 'Dim', DAR: 'Dark', OFF: 'Off' };
+				$('display').textContent = 'Display: ' + (names[v] || v);
+				$('display').classList.toggle('lit', v !== 'OFF');
+				break;
 			case 'MU':
 				$('mute').classList.toggle('on', v === 'ON');
 				$('mv-readout').classList.toggle('muted', v === 'ON');
