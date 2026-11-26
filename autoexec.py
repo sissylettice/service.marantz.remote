@@ -1,4 +1,4 @@
-"""Marantz AV7706 web remote - Kodi service.
+"""Marantz AV7705 web remote - Kodi service.
 
 Keeps a telnet-style connection to the AVR, serves the web page in html/,
 and relays state/commands between the page (WebSocket) and the AVR.
@@ -37,10 +37,10 @@ DEAD_AFTER = 75                # seconds of silence before we reconnect
 
 STATUS_QUERIES = ['ZM?', 'MV?', 'MU?', 'SI?', 'MS?', 'SSSMG ?', 'CV?', 'PSDRC ?',
                   'PSDYNEQ ?', 'PSDYNVOL ?', 'PSMULTEQ: ?', 'PSLFE ?', 'PSLOM ?',
-                  'DIM ?']
+                  'DIM ?', 'SSFUN ?', 'SSSOD ?']
 
 # Allowed values for the audio-setting dropdowns, and how each is written.
-# (The AV7706 does not answer the old PSDCO command; it reports PSDRC instead.)
+# (The AV7705 does not answer the old PSDCO command; it reports PSDRC instead.)
 PS_OPTIONS = {
     'PSDRC': ('AUTO', 'LOW', 'MID', 'HI', 'OFF'),
     'PSDYNEQ': ('ON', 'OFF'),
@@ -142,6 +142,16 @@ def parse_line(line):
     elif line.startswith('SSSMG '):
         # sound-mode button group last used: MOV / MUS / GAM / PUR
         updates['SSSMG'] = line[6:].strip()
+    elif line.startswith('SSFUN') or line.startswith('SSSOD'):
+        # input names ("SSFUNSAT/CBL AppleTV") and which inputs are in use
+        # ("SSSODDVD DEL"); each list ends with "SSFUN END" / "SSSOD END"
+        key, rest = line[:5], line[5:]
+        if rest and not rest.startswith(' '):
+            code, _, value = rest.partition(' ')
+            with state_lock:
+                table = dict(state.get(key) or {})
+            table[code] = value.strip()
+            updates[key] = table
     elif line.startswith('CV'):
         m = CV_LINE.match(line)
         if m:

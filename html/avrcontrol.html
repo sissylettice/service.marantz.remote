@@ -401,6 +401,29 @@
 		});
 	}
 
+	// Input list: start from the standard inputs in the HTML, then apply the AVR's
+	// own names (SSFUN) and hide inputs set to "Delete" in its menu (SSSOD).
+	var DEFAULT_INPUTS = Array.prototype.map.call($('SI').options, function (o) {
+		return [o.value, o.textContent];
+	});
+	function buildInputs() {
+		var names = state.SSFUN || {}, used = state.SSSOD || {}, current = state.SI;
+		var list = DEFAULT_INPUTS.slice();
+		Object.keys(used).forEach(function (code) {      // inputs we didn't know about
+			if (!list.some(function (i) { return i[0] === code; })) list.push([code, code]);
+		});
+		var sel = $('SI');
+		sel.innerHTML = '';
+		list.forEach(function (i) {
+			if (used[i[0]] === 'DEL' && i[0] !== current) return;
+			var o = document.createElement('option');
+			o.value = i[0];
+			o.textContent = names[i[0]] || i[1];
+			sel.appendChild(o);
+		});
+		if (current !== undefined) setSelect(sel, current);
+	}
+
 	// ---- rendering state from the server --------------------------------
 	function render(key, v) {
 		var el = sliders[key];
@@ -413,7 +436,9 @@
 		}
 		if (psSelects[key]) return setSelect(psSelects[key], v);
 		switch (key) {
-			case 'SI': setSelect($('SI'), v); break;
+			case 'SI': buildInputs(); break;
+			case 'SSFUN':
+			case 'SSSOD': buildInputs(); break;
 			case 'MS': $('ms-status').textContent = v; tallyMode(v); break;
 			case 'SSSMG': tallyGroup(v); break;
 			case 'DIM':
