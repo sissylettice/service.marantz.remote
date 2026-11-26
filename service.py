@@ -1,7 +1,8 @@
-"""Marantz AV7705 web remote - Kodi service.
+"""Marantz AVR Remote - Kodi service add-on.
 
-Keeps a telnet-style connection to the AVR, serves the web page in html/,
-and relays state/commands between the page (WebSocket) and the AVR.
+Keeps a telnet-style connection to a Marantz/Denon AV receiver, serves the web
+page in html/, and relays state and commands between the page (WebSocket) and
+the receiver. Written for and tested with a Marantz AV7705.
 """
 import functools
 import json
@@ -9,27 +10,29 @@ import logging
 import os
 import re
 import socket
+import sys
 import threading
 import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
-from websocket_server import WebsocketServer
+ADDON_ID = 'service.marantz.remote'
+ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(ADDON_DIR, 'resources', 'lib'))
+
+from websocket_server import WebsocketServer  # noqa: E402  (bundled in resources/lib)
 
 try:
     import xbmc
+    import xbmcaddon
 except ImportError:  # running outside Kodi for testing
-    xbmc = None
+    xbmc = xbmcaddon = None
 
-# ---------------------------------------------------------------- settings --
-AVR_HOST = '10.0.10.22'
+# ------------------------------------------------------------------ constants --
 AVR_PORT = 23
 BIND_HOST = '0.0.0.0'          # listen on all interfaces of the Kodi box
-HTTP_PORT = 9000
-WS_PORT = 12254
-START_PAGE = 'avrcontrol.html' # http://<kodi>:9000/ redirects here
+START_PAGE = 'avrcontrol.html'  # http://<kodi>:<port>/ redirects here
 OLD_PAGES = ('/avr4.html',)    # old bookmarks / home-screen icons redirect too
-MAX_VOLUME_DB = 0.0            # the remote will never set master volume above this
-HTML_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'html')
+HTML_DIR = os.path.join(ADDON_DIR, 'html')
 
 CMD_SPACING = 0.06             # Marantz wants >= 50 ms between commands
 KEEPALIVE_AFTER = 60           # seconds of silence before we poke the AVR
@@ -51,17 +54,63 @@ PS_OPTIONS = {
 PS_SEPARATOR = {'PSMULTEQ': ':'}   # everything else uses a space
 SAFE_VALUE = re.compile(r'^[A-Z0-9/.:+\- ]{1,24}$')   # inputs / sound modes
 SAFE_CHANNEL = re.compile(r'^[A-Z0-9]{1,4}$')
+IPV4 = re.compile(r'^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$')
+HOSTNAME = re.compile(r'^(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,62})(\.[A-Za-z0-9]([A-Za-z0-9-]{0,62}))*$')
 
 
-# ----------------------------------------------------------------- logging --
+# ------------------------------------------------------------------- logging --
 def log(msg, error=False):
     if xbmc:
-        xbmc.log('[service.autoexec] ' + msg, xbmc.LOGERROR if error else xbmc.LOGINFO)
+        xbmc.log('[%s] %s' % (ADDON_ID, msg), xbmc.LOGERROR if error else xbmc.LOGINFO)
     else:
         print(('ERROR: ' if error else '') + msg)
 
 
-# -------------------------------------------------------- level conversion --
+# ------------------------------------------------------------------ settings --
+# Stored by Kodi (Settings > Add-ons > Marantz AVR Remote > Configure).
+DEFAULTS = {
+    'avr_host': '10.0.10.22',
+    'max_volume': 80,              # absolute scale, 80 = 0 dB
+    'volume_display': 'absolute',
+    'http_port': 9000,
+    'ws_port': 12254,
+}
+_test_settings = {}                # used instead of Kodi when testing outside it
+
+
+def get_setting(key):
+    default = DEFAULTS[key]
+    if xbmcaddon is None:
+        return _test_settings.get(key, default)
+    addon = xbmcaddon.Addon(ADDON_ID)   # fresh object: picks up changed values
+    try:
+        if isinstance(default, int):
+            return addon.getSettingInt(key)
+        return addon.getSetting(key) or default
+    except Exception as e:  # missing or malformed value
+        log('Setting %s unreadable (%s), using default' % (key, e), error=True)
+        return default
+
+
+def set_setting(key, value):
+    if xbmcaddon is None:
+        _test_settings[key] = value
+    else:
+        xbmcaddon.Addon(ADDON_ID).setSetting(key, str(value))
+
+
+def clean_host(text):
+    """Return a valid IPv4 address or hostname, or None."""
+    host = str(text).strip()
+    m = IPV4.match(host)
+    if m:
+        return host if all(int(p) <= 255 for p in m.groups()) else None
+    if host.replace('.', '').isdigit():   # looks like a mistyped IP, not a hostname
+        return None
+    return host if HOSTNAME.match(host) else None
+
+
+# ---------------------------------------------------------- level conversion --
 def level_to_db(text, zero):
     """'50' -> 0.0, '485' -> -1.5 (a third digit 5 means +0.5)."""
     text = text.strip()
@@ -78,7 +127,7 @@ def db_to_level(db, zero, lo, hi):
     return '%02d5' % whole if level != whole else '%02d' % whole
 
 
-# ------------------------------------------------------------------- state --
+# --------------------------------------------------------------------- state --
 state = {}
 state_lock = threading.Lock()
 ws_server = None
@@ -104,7 +153,8 @@ def update_state(updates):
 
 
 def volume_cap():
-    cap = MAX_VOLUME_DB
+    """Highest master volume in dB the remote may set."""
+    cap = max(0, min(98, int(get_setting('max_volume')))) - 80
     with state_lock:
         avr_max = state.get('MVMAX')
     if avr_max is not None:
@@ -112,7 +162,15 @@ def volume_cap():
     return cap
 
 
-# ------------------------------------------------------------- AVR parsing --
+def page_config():
+    return {
+        'mv_max': volume_cap(),
+        'avr_host': avr.host,
+        'volume_display': get_setting('volume_display'),
+    }
+
+
+# --------------------------------------------------------------- AVR parsing --
 PS_LINE = re.compile(r'^(PSDRC|PSDYNEQ|PSDYNVOL|PSMULTEQ|PSLOM)[ :](.+)$')
 CV_LINE = re.compile(r'^CV([A-Z0-9]+) (\d{2,3})$')
 LFE_LINE = re.compile(r'^PSLFE (\d{2})$')
@@ -171,7 +229,7 @@ def parse_line(line):
         update_state(updates)
 
 
-# ---------------------------------------------------------- AVR connection --
+# ------------------------------------------------------------ AVR connection --
 class Avr(object):
     def __init__(self, host, port):
         self.host = host
@@ -179,7 +237,22 @@ class Avr(object):
         self.sock = None
         self.write_lock = threading.Lock()
         self.stopping = threading.Event()
+        self.wake = threading.Event()     # cuts a retry wait short
         self.connected = False
+
+    def _pause(self, seconds):
+        self.wake.wait(seconds)
+        self.wake.clear()
+
+    def set_host(self, host):
+        """Switch to another AVR address: drop the current connection and reconnect now."""
+        if host == self.host:
+            return
+        log('AVR address changed to %s' % host)
+        self.host = host
+        with self.write_lock:
+            self._close()
+        self.wake.set()
 
     def send(self, cmd):
         with self.write_lock:
@@ -201,8 +274,10 @@ class Avr(object):
         threading.Thread(target=self._query_all, name='avr-query', daemon=True).start()
 
     def _query_all(self):
+        sock = self.sock
         for q in STATUS_QUERIES:
-            if self.stopping.is_set() or not self.send(q):
+            # stop if the connection was replaced (reconnect or address change)
+            if self.stopping.is_set() or self.sock is not sock or not self.send(q):
                 return
             time.sleep(0.2)
 
@@ -222,17 +297,22 @@ class Avr(object):
 
     def stop(self):
         self.stopping.set()
+        self.wake.set()
         self._close()
 
     def run(self):
         backoff = 1
         while not self.stopping.is_set():
+            host = self.host
             try:
-                sock = socket.create_connection((self.host, self.port), timeout=5)
+                sock = socket.create_connection((host, self.port), timeout=5)
             except OSError as e:
-                log('Cannot reach AVR at %s: %s (retry in %ds)' % (self.host, e, backoff))
-                self.stopping.wait(backoff)
-                backoff = min(backoff * 2, 30)
+                log('Cannot reach AVR at %s: %s (retry in %ds)' % (host, e, backoff))
+                self._pause(backoff)
+                backoff = 1 if self.host != host else min(backoff * 2, 30)
+                continue
+            if self.host != host:          # address changed while we were connecting
+                sock.close()
                 continue
             backoff = 1
             sock.settimeout(1.0)
@@ -242,14 +322,16 @@ class Avr(object):
             try:
                 self._read_loop(sock)
             except (OSError, ConnectionError) as e:
-                if not self.stopping.is_set():
+                if self.host != host:
+                    log('Leaving AVR at %s' % host)
+                elif not self.stopping.is_set():
                     log('AVR connection lost: %s' % e, error=True)
             finally:
                 with self.write_lock:
                     if self.sock is sock:
                         self._close()
                 self._set_connected(False)
-            self.stopping.wait(1)
+            self._pause(1)
 
     def _read_loop(self, sock):
         buf = b''
@@ -257,7 +339,7 @@ class Avr(object):
         pinged = False
         while not self.stopping.is_set():
             if self.sock is not sock:
-                raise ConnectionError('socket closed after write error')
+                raise ConnectionError('connection closed (write error or address change)')
             try:
                 chunk = sock.recv(1024)
             except socket.timeout:
@@ -285,13 +367,36 @@ class Avr(object):
                     log('Could not handle AVR line %r: %s' % (line, e), error=True)
 
 
-avr = Avr(AVR_HOST, AVR_PORT)
+avr = Avr(DEFAULTS['avr_host'], AVR_PORT)
+
+
+def apply_settings():
+    """(Re)read settings that can change while running."""
+    host = clean_host(get_setting('avr_host'))
+    if host is None:
+        log('AVR address setting %r is not valid; keeping %s' % (get_setting('avr_host'), avr.host),
+            error=True)
+    else:
+        avr.set_host(host)
+    broadcast({'config': page_config()})
 
 
 # ---------------------------------------------------- commands from the page --
 def handle_command(msg):
+    """Act on a message from the page. Returns an error string to show, or None."""
     cmd = msg['cmd']
-    if cmd == 'refresh':
+    if cmd == 'set_avr_host':
+        host = clean_host(msg['host'])
+        if host is None:
+            return 'Not a valid IP address or hostname: %s' % str(msg['host'])[:60]
+        try:
+            set_setting('avr_host', host)
+        except Exception as e:
+            log('Could not save AVR address: %s' % e, error=True)
+            return 'Could not save the setting on Kodi: %s' % e
+        avr.set_host(host)
+        broadcast({'config': page_config()})
+    elif cmd == 'refresh':
         avr.query_all()
     elif cmd == 'power':
         avr.send('ZMON' if msg['value'] == 'ON' else 'ZMOFF')
@@ -336,7 +441,7 @@ def on_new_client(client, server):
         snapshot = dict(state)
     server.send_message(client, json.dumps({
         'avr': avr.connected,
-        'config': {'mv_max': volume_cap()},
+        'config': page_config(),
         'state': snapshot,
     }))
 
@@ -346,18 +451,31 @@ def on_message(client, server, message):
     try:
         msg = json.loads(message)
         if isinstance(msg, dict):
-            handle_command(msg)
+            error = handle_command(msg)
+            if error:
+                server.send_message(client, json.dumps({'error': error}))
     except (KeyError, TypeError, ValueError, OverflowError) as e:
         log('Ignored bad message from page: %r (%s)' % (message[:200], e), error=True)
 
 
-# -------------------------------------------------------------- web server --
+# ---------------------------------------------------------------- web server --
 class RemoteHandler(SimpleHTTPRequestHandler):
+    ws_port = DEFAULTS['ws_port']
+
     def do_GET(self):
         if self.path == '/' or self.path in OLD_PAGES:
             self.send_response(302)
             self.send_header('Location', '/' + START_PAGE)
             self.end_headers()
+            return
+        if self.path.split('?')[0] == '/config.js':
+            # tells the page which WebSocket port to use
+            body = ('window.REMOTE_CONFIG = %s;\n' % json.dumps({'ws_port': self.ws_port})).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/javascript')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         super().do_GET()
 
@@ -370,37 +488,52 @@ class RemoteHandler(SimpleHTTPRequestHandler):
         pass
 
 
-# --------------------------------------------------------------------- main --
+# ---------------------------------------------------------------------- main --
+if xbmc:
+    class ServiceMonitor(xbmc.Monitor):
+        def onSettingsChanged(self):
+            log('Settings changed')
+            apply_settings()
+
+
 def main():
     global ws_server
-    log('Starting Marantz remote')
+    log('Starting Marantz AVR Remote')
+
+    host = clean_host(get_setting('avr_host'))
+    if host:
+        avr.host = host
+    http_port = int(get_setting('http_port'))
+    ws_port = int(get_setting('ws_port'))
+    log('AVR address %s, web page port %d, WebSocket port %d' % (avr.host, http_port, ws_port))
 
     threading.Thread(target=avr.run, name='avr-reader', daemon=True).start()
 
     httpd = None
     try:
-        handler = functools.partial(RemoteHandler, directory=HTML_DIR)
-        httpd = ThreadingHTTPServer((BIND_HOST, HTTP_PORT), handler)
+        handler = functools.partial(type('Handler', (RemoteHandler,), {'ws_port': ws_port}),
+                                    directory=HTML_DIR)
+        httpd = ThreadingHTTPServer((BIND_HOST, http_port), handler)
         httpd.daemon_threads = True
         threading.Thread(target=httpd.serve_forever, name='http', daemon=True).start()
-        log('Web page on port %d' % HTTP_PORT)
+        log('Web page on port %d' % http_port)
     except OSError as e:
-        log('Could not start web server on port %d: %s' % (HTTP_PORT, e), error=True)
+        log('Could not start web server on port %d: %s' % (http_port, e), error=True)
         httpd = None
 
     try:
-        ws_server = WebsocketServer(host=BIND_HOST, port=WS_PORT, loglevel=logging.WARNING)
+        ws_server = WebsocketServer(host=BIND_HOST, port=ws_port, loglevel=logging.WARNING)
         ws_server.set_fn_new_client(on_new_client)
         ws_server.set_fn_message_received(on_message)
         ws_server.run_forever(threaded=True)
-        log('WebSocket on port %d' % WS_PORT)
+        log('WebSocket on port %d' % ws_port)
     except OSError as e:
-        log('Could not start WebSocket server on port %d: %s' % (WS_PORT, e), error=True)
+        log('Could not start WebSocket server on port %d: %s' % (ws_port, e), error=True)
         ws_server = None
 
     try:
         if xbmc:
-            monitor = xbmc.Monitor()
+            monitor = ServiceMonitor()
             while not monitor.abortRequested():
                 if monitor.waitForAbort(1):
                     break
@@ -410,7 +543,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        log('Stopping Marantz remote')
+        log('Stopping Marantz AVR Remote')
         avr.stop()
         if ws_server is not None:
             try:

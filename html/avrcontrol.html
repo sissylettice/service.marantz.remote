@@ -10,6 +10,8 @@
 <meta name="theme-color" content="#0b0d10">
 <link href="./noUiSlider-12.1.0/distribute/nouislider.min.css" rel="stylesheet">
 <script src="./noUiSlider-12.1.0/distribute/nouislider.min.js"></script>
+<script src="./config.js"></script><!-- written by the add-on: WebSocket port -->
+
 <style>
 	:root {
 		--bg: #0b0d10;
@@ -58,7 +60,19 @@
 	.row3 h2 { margin: 0; }
 	.row3 > :first-child { justify-self: start; }
 	.row3 > :last-child { justify-self: end; }
-	.standby .card { opacity: .35; pointer-events: none; }
+	.standby .card:not(.settings) { opacity: .35; pointer-events: none; }
+
+	[hidden] { display: none !important; }
+
+	/* AVR address settings */
+	.host { font-size: 17px; font-variant-numeric: tabular-nums; }
+	.host-form { display: flex; flex-direction: column; gap: 10px; }
+	.host-form input { width: 100%; font: inherit; font-size: 17px; color: var(--text);   /* >=16px: no iOS zoom on focus */
+	                   background: #1d2127; border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+	.host-form .gap { justify-content: flex-end; gap: 8px; }
+	.pill.save { background: var(--accent); border-color: var(--accent); color: #111; font-weight: 600; }
+	.msg { font-size: 13px; color: var(--muted); margin-top: 6px; min-height: 1em; }
+	.msg.err { color: var(--bad); }
 
 	/* master volume */
 	.vol { display: flex; align-items: center; gap: 12px; margin: 4px 0 18px; }
@@ -224,16 +238,31 @@
 			</label>
 		</div>
 	</section>
+
+	<section class="card settings">
+		<div class="row"><h2>AVR address</h2><button id="avr-edit" class="pill">Change</button></div>
+		<div id="avr-host-view" class="host">&mdash;</div>
+		<form id="avr-form" class="host-form" hidden>
+			<input id="avr-host" type="text" inputmode="decimal" autocomplete="off" autocapitalize="off"
+			       spellcheck="false" placeholder="e.g. 10.0.10.22" aria-label="AVR IP address">
+			<div class="row gap">
+				<button type="button" id="avr-cancel" class="pill">Cancel</button>
+				<button type="submit" class="pill save">Save</button>
+			</div>
+		</form>
+		<div id="avr-msg" class="msg"></div>
+	</section>
 </main>
 
 <script>
 (function () {
 	'use strict';
 
-	var WS_URL = 'ws://' + (location.hostname || '10.0.10.250') + ':12254/';
+	var CONFIG = window.REMOTE_CONFIG || {};
+	var WS_URL = 'ws://' + (location.hostname || '10.0.10.250') + ':' + (CONFIG.ws_port || 12254) + '/';
 	var HOLD_MS = 700;   // ignore AVR echoes for a slider this long after you touch it
 	// Master volume readout: 'absolute' matches the front panel (0-98, 80 = 0 dB),
-	// 'relative' shows dB (-80 to +18).
+	// 'relative' shows dB (-80 to +18). Set in the add-on's settings in Kodi.
 	var VOLUME_SCALE = 'absolute';
 
 	var ws = null, serverUp = false, avrUp = false;
@@ -296,12 +325,12 @@
 		behaviour: 'none'            // must grab the handle: no jumping by tapping the track
 	}, function (v) { send({ cmd: 'mv', db: v }); });
 
-	mvEl.noUiSlider.on('update', function (values) {
-		var db = Number(values[0]);
+	function renderVolume(db) {
 		$('mv-readout').innerHTML = VOLUME_SCALE === 'absolute'
 			? (db + 80).toFixed(1)
 			: fmt(db) + '<small> dB</small>';
-	});
+	}
+	mvEl.noUiSlider.on('update', function (values) { renderVolume(Number(values[0])); });
 
 	Array.prototype.forEach.call(document.querySelectorAll('.v-slider'), function (el) {
 		var key = el.getAttribute('data-key');
@@ -353,6 +382,35 @@
 		}
 	});
 	$('refresh').addEventListener('click', function () { send({ cmd: 'refresh' }); });
+	// ---- AVR address setting ---------------------------------------------
+	var avrHost = null, hostPending = false;
+	function showHostMsg(text, isError) {
+		$('avr-msg').textContent = text || '';
+		$('avr-msg').classList.toggle('err', !!isError);
+	}
+	function editHost(open) {
+		$('avr-form').hidden = !open;
+		$('avr-host-view').hidden = open;
+		$('avr-edit').hidden = open;
+		if (open) {
+			$('avr-host').value = avrHost || '';
+			$('avr-host').focus();
+			showHostMsg('');
+		}
+	}
+	$('avr-edit').addEventListener('click', function () { editHost(true); });
+	$('avr-cancel').addEventListener('click', function () { editHost(false); });
+	$('avr-form').addEventListener('submit', function (e) {
+		e.preventDefault();
+		var host = $('avr-host').value.trim();
+		if (!host) return showHostMsg('Enter the AVR\'s IP address.', true);
+		if (!serverUp) return showHostMsg('Not connected to Kodi, so the address can\'t be saved.', true);
+		if (host !== avrHost && !confirm('Connect the remote to the AVR at ' + host + '?')) return;
+		hostPending = true;
+		send({ cmd: 'set_avr_host', host: host });
+		showHostMsg('Saving…');
+	});
+
 	$('display').addEventListener('click', function () {
 		send({ cmd: 'display', value: state.DIM === 'OFF' ? 'BRI' : 'OFF' });
 	});
@@ -461,8 +519,10 @@
 		var dot = $('conn-dot'), text = $('conn-text');
 		dot.className = 'dot' + (serverUp && avrUp ? ' ok' : serverUp ? ' warn' : '');
 		text.textContent = !serverUp ? 'Kodi remote service offline'
-			: !avrUp ? 'AVR not connected'
+			: !avrUp ? 'AVR not connected' + (avrHost ? ' (' + avrHost + ')' : '')
 			: state.ZM === 'OFF' ? 'Standby' : 'Connected';
+		// clear the "Connecting…" note once the new address answers
+		if (avrUp && /^Saved\./.test($('avr-msg').textContent)) showHostMsg('Connected to ' + avrHost + '.');
 	}
 
 	function onMessage(e) {
@@ -470,6 +530,25 @@
 		try { msg = JSON.parse(e.data); } catch (err) { return console.log('bad message', e.data); }
 		if (msg.config && msg.config.mv_max !== undefined) {
 			mvEl.noUiSlider.updateOptions({ range: { min: -80, max: msg.config.mv_max } });
+		}
+		if (msg.config && msg.config.volume_display) {
+			VOLUME_SCALE = msg.config.volume_display;
+			renderVolume(Number(mvEl.noUiSlider.get()));
+		}
+		if (msg.config && msg.config.avr_host !== undefined) {
+			// a new address means the old AVR connection is going away
+			if (avrHost !== null && msg.config.avr_host !== avrHost) avrUp = false;
+			avrHost = msg.config.avr_host;
+			$('avr-host-view').textContent = avrHost;
+			if (hostPending) {
+				hostPending = false;
+				editHost(false);
+				showHostMsg('Saved. Connecting to ' + avrHost + '…');
+			}
+		}
+		if (msg.error) {
+			hostPending = false;
+			showHostMsg(msg.error, true);
 		}
 		if (msg.avr !== undefined) avrUp = msg.avr;
 		if (msg.state) {

@@ -1,0 +1,73 @@
+# Kodi Media Center language file
+# Addon Name: Marantz AVR Remote
+# Addon id: service.marantz.remote
+# Addon Provider: JC
+msgid ""
+msgstr ""
+"Project-Id-Version: service.marantz.remote\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: \n"
+"PO-Revision-Date: \n"
+"Last-Translator: \n"
+"Language-Team: English\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: en_GB\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgctxt "#30000"
+msgid "Receiver"
+msgstr ""
+
+msgctxt "#30001"
+msgid "AVR IP address"
+msgstr ""
+
+msgctxt "#30002"
+msgid "IP address (or hostname) of the AV receiver. Its network control must be enabled, and its network standby set to On so it can be turned on remotely. Can also be changed on the web page."
+msgstr ""
+
+msgctxt "#30003"
+msgid "Maximum volume (absolute scale, 80 = 0 dB)"
+msgstr ""
+
+msgctxt "#30004"
+msgid "The remote will never set the master volume above this level, by slider or + button."
+msgstr ""
+
+msgctxt "#30005"
+msgid "Volume display"
+msgstr ""
+
+msgctxt "#30006"
+msgid "How the web page shows master volume: the absolute scale used by the receiver's front panel (0-98), or relative dB (-80 to +18)."
+msgstr ""
+
+msgctxt "#30007"
+msgid "Absolute (0-98)"
+msgstr ""
+
+msgctxt "#30008"
+msgid "Relative (dB)"
+msgstr ""
+
+msgctxt "#30010"
+msgid "Network"
+msgstr ""
+
+msgctxt "#30011"
+msgid "Web page port"
+msgstr ""
+
+msgctxt "#30012"
+msgid "Port for the web remote page: http://<kodi-address>:<port>/. Takes effect after restarting Kodi."
+msgstr ""
+
+msgctxt "#30013"
+msgid "WebSocket port"
+msgstr ""
+
+msgctxt "#30014"
+msgid "Port the web page uses to talk to this add-on. Takes effect after restarting Kodi."
+msgstr ""
